@@ -1,9 +1,6 @@
 name: Cache Warmer for zuby.pro
 
-on:
-  schedule:
-    - cron: '30 0 * * *'   # 03:30 МСК — за 30 минут до бота
-  workflow_dispatch:
+Добавил файл на GitHub.
 
 jobs:
   warm-cache:
