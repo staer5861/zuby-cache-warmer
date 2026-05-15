@@ -1,0 +1,63 @@
+name: Cache Warmer for zuby.pro
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  warm-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Warm Cloudflare edge cache
+        run: |
+          SITEMAP_INDEX="https://zuby.pro/sitemap_index.xml"
+          UA="Mozilla/5.0 (compatible; CacheWarmer/1.0; +https://zuby.pro)"
+          TOTAL=0
+          HITS=0
+          MISSES=0
+          FAILED=0
+
+          echo "=== Старт прогрева $(date -u) ==="
+          echo "Sitemap: $SITEMAP_INDEX"
+          echo ""
+
+          SUBMAPS=$(curl -s -A "$UA" "$SITEMAP_INDEX" | grep -oP '(?<=<loc>)[^<]+')
+
+          for SUBMAP in $SUBMAPS; do
+            echo "--- Обход $SUBMAP ---"
+            URLS=$(curl -s -A "$UA" "$SUBMAP" | grep -oP '(?<=<loc>)[^<]+')
+            for URL in $URLS; do
+              TOTAL=$((TOTAL+1))
+              RESPONSE=$(curl -s -o /dev/null \
+                -w "%{http_code}|%{time_total}|%header{cf-cache-status}|%header{cf-apo-via}" \
+                -A "$UA" \
+                "$URL")
+              CODE=$(echo "$RESPONSE" | cut -d'|' -f1)
+              TIME=$(echo "$RESPONSE" | cut -d'|' -f2)
+              STATUS=$(echo "$RESPONSE" | cut -d'|' -f3)
+              APO=$(echo "$RESPONSE" | cut -d'|' -f4)
+
+              if [ "$CODE" = "200" ]; then
+                if [ "$STATUS" = "HIT" ]; then
+                  HITS=$((HITS+1))
+                else
+                  MISSES=$((MISSES+1))
+                fi
+              else
+                FAILED=$((FAILED+1))
+              fi
+
+              printf "%-3s %-7s %-10s %ss  %s\n" "$CODE" "$STATUS" "$APO" "$TIME" "$URL"
+              sleep 0.3
+            done
+            echo ""
+          done
+
+          echo "=== Итого ==="
+          echo "Всего страниц: $TOTAL"
+          echo "HIT (уже в кэше): $HITS"
+          echo "MISS/прогрето: $MISSES"
+          echo "Ошибок: $FAILED"
+          echo "Завершено: $(date -u)"
