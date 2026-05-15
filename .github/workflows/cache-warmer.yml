@@ -2,54 +2,54 @@ name: Cache Warmer for zuby.pro
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '30 0 * * *'   # 03:30 МСК — за 30 минут до бота
   workflow_dispatch:
 
 jobs:
   warm-cache:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Warm Cloudflare edge cache
         run: |
           SITEMAP_INDEX="https://zuby.pro/sitemap_index.xml"
-          UA="Mozilla/5.0 (compatible; CacheWarmer/1.0; +https://zuby.pro)"
+          UA_BROWSER="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+          UA_YANDEX="Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)"
           TOTAL=0
           HITS=0
           MISSES=0
           FAILED=0
 
           echo "=== Старт прогрева $(date -u) ==="
-          echo "Sitemap: $SITEMAP_INDEX"
-          echo ""
 
-          SUBMAPS=$(curl -s -A "$UA" "$SITEMAP_INDEX" | grep -oP '(?<=<loc>)[^<]+')
+          SUBMAPS=$(curl -s --compressed -A "$UA_BROWSER" "$SITEMAP_INDEX" | grep -oP '(?<=<loc>)[^<]+')
 
           for SUBMAP in $SUBMAPS; do
-            echo "--- Обход $SUBMAP ---"
-            URLS=$(curl -s -A "$UA" "$SUBMAP" | grep -oP '(?<=<loc>)[^<]+')
+            echo "--- $SUBMAP ---"
+            URLS=$(curl -s --compressed -A "$UA_BROWSER" "$SUBMAP" | grep -oP '(?<=<loc>)[^<]+')
             for URL in $URLS; do
               TOTAL=$((TOTAL+1))
-              RESPONSE=$(curl -s -o /dev/null \
+
+              # Проход 1 — обычный браузерный UA
+              RESPONSE=$(curl -s -o /dev/null --compressed --max-time 30 \
                 -w "%{http_code}|%{time_total}|%header{cf-cache-status}|%header{cf-apo-via}" \
-                -A "$UA" \
-                "$URL")
+                -A "$UA_BROWSER" "$URL")
               CODE=$(echo "$RESPONSE" | cut -d'|' -f1)
               TIME=$(echo "$RESPONSE" | cut -d'|' -f2)
               STATUS=$(echo "$RESPONSE" | cut -d'|' -f3)
               APO=$(echo "$RESPONSE" | cut -d'|' -f4)
 
               if [ "$CODE" = "200" ]; then
-                if [ "$STATUS" = "HIT" ]; then
-                  HITS=$((HITS+1))
-                else
-                  MISSES=$((MISSES+1))
-                fi
+                [ "$STATUS" = "HIT" ] && HITS=$((HITS+1)) || MISSES=$((MISSES+1))
               else
                 FAILED=$((FAILED+1))
               fi
+              printf "%-3s %-7s %-12s %ss  %s\n" "$CODE" "$STATUS" "$APO" "$TIME" "$URL"
 
-              printf "%-3s %-7s %-10s %ss  %s\n" "$CODE" "$STATUS" "$APO" "$TIME" "$URL"
+              # Проход 2 — YandexBot UA (прогрев отдельного варианта кэша)
+              curl -s -o /dev/null --compressed --max-time 30 \
+                -A "$UA_YANDEX" "$URL" > /dev/null
+
               sleep 0.3
             done
             echo ""
