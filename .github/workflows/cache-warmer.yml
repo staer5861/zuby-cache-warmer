@@ -1,44 +1,40 @@
 name: Cache Warmer for zuby.pro
-
 on:
   schedule:
-    - cron: '30 0 * * *'
-    - cron: '0 4 * * *'
+    - cron: '17 */3 * * *'
   workflow_dispatch:
-
 jobs:
   warm-cache:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Warm Cloudflare edge cache
+        shell: bash {0}
         run: |
           SITEMAP_INDEX="https://zuby.pro/sitemap_index.xml"
           UA_BROWSER="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
           UA_YANDEX="Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)"
-          TOTAL=0
-          HITS=0
-          MISSES=0
-          FAILED=0
-
+          TOTAL=0; HITS=0; MISSES=0; FAILED=0
+          FAILED_LIST=""
           echo "=== Старт прогрева $(date -u) ==="
-
-          SUBMAPS=$(curl -s --compressed -A "$UA_BROWSER" "$SITEMAP_INDEX" | grep -oP '(?<=<loc>)[^<]+')
-
+          SUBMAPS=$(curl -s --compressed --max-time 30 --retry 2 -A "$UA_BROWSER" "$SITEMAP_INDEX" | grep -oP '(?<=<loc>)[^<]+')
+          if [ -z "$SUBMAPS" ]; then
+            echo "!!! Не удалось получить sitemap index — прогрев невозможен"
+            exit 1
+          fi
           for SUBMAP in $SUBMAPS; do
             echo "--- $SUBMAP ---"
-            URLS=$(curl -s --compressed -A "$UA_BROWSER" "$SUBMAP" | grep -oP '(?<=<loc>)[^<]+')
+            URLS=$(curl -s --compressed --max-time 30 --retry 2 -A "$UA_BROWSER" "$SUBMAP" | grep -oP '(?<=<loc>)[^<]+')
             for URL in $URLS; do
               TOTAL=$((TOTAL+1))
-
-              RESPONSE=$(curl -s -o /dev/null --compressed --max-time 30 \
+              RESPONSE=$(curl -s -o /dev/null --compressed --max-time 45 --retry 2 \
                 -w "%{http_code}|%{time_total}|%header{cf-cache-status}|%header{cf-apo-via}" \
                 -A "$UA_BROWSER" "$URL")
               CODE=$(echo "$RESPONSE" | cut -d'|' -f1)
               TIME=$(echo "$RESPONSE" | cut -d'|' -f2)
               STATUS=$(echo "$RESPONSE" | cut -d'|' -f3)
               APO=$(echo "$RESPONSE" | cut -d'|' -f4)
-
+              [ -z "$CODE" ] && CODE="000"
               if [ "$CODE" = "200" ]; then
                 if [ "$STATUS" = "HIT" ]; then
                   HITS=$((HITS+1))
@@ -47,20 +43,21 @@ jobs:
                 fi
               else
                 FAILED=$((FAILED+1))
+                FAILED_LIST="$FAILED_LIST$URL ($CODE)"$'\n'
               fi
               printf "%-3s %-7s %-12s %ss  %s\n" "$CODE" "$STATUS" "$APO" "$TIME" "$URL"
-
-              curl -s -o /dev/null --compressed --max-time 30 \
-                -A "$UA_YANDEX" "$URL" > /dev/null
-
+              curl -s -o /dev/null --compressed --max-time 30 -A "$UA_YANDEX" "$URL"
               sleep 0.3
             done
             echo ""
           done
-
           echo "=== Итого ==="
           echo "Всего страниц: $TOTAL"
           echo "HIT (уже в кэше): $HITS"
           echo "MISS/прогрето: $MISSES"
           echo "Ошибок: $FAILED"
+          if [ -n "$FAILED_LIST" ]; then
+            echo "=== Не прогрелись ==="
+            printf "%s" "$FAILED_LIST"
+          fi
           echo "Завершено: $(date -u)"
