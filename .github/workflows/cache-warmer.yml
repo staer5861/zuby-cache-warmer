@@ -3,6 +3,9 @@ on:
   schedule:
     - cron: '17 */3 * * *'
   workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
 jobs:
   warm-cache:
     runs-on: ubuntu-latest
@@ -61,3 +64,9 @@ jobs:
             printf "%s" "$FAILED_LIST"
           fi
           echo "Завершено: $(date -u)"
+
+      - name: Keep workflow alive
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow enable "${{ github.workflow }}" --repo "${{ github.repository }}"
