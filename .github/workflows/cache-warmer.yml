@@ -65,7 +65,8 @@ jobs:
           fi
           echo "Завершено: $(date -u)"
           [ "$FAILED" -gt 0 ] && exit 1 || true
-      - name: Keep workflow alive       
+      - name: Keep workflow alive
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow enable cache-warmer.yml --repo "${{ github.repository }}"
